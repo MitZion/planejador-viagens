@@ -32,16 +32,14 @@ def buscar_cotacao_api(moeda):
     except:
         return 1.0
 
-# --- GATILHOS DE ATUALIZAÇÃO (A Mágica da Cotação!) ---
+# --- GATILHOS DE ATUALIZAÇÃO ---
 def on_moeda_change_rot():
-    """Força a cotação do Roteiro a atualizar na mesma hora que a moeda muda"""
     rk = st.session_state.rot_key
     if f"rm_{rk}" in st.session_state:
         moeda_selecionada = st.session_state[f"rm_{rk}"]
         st.session_state[f"rc_{rk}"] = buscar_cotacao_api(moeda_selecionada)
 
 def on_moeda_change_fin():
-    """Força a cotação do Financeiro a atualizar na mesma hora que a moeda muda"""
     fk = st.session_state.fin_key
     if f"fm_{fk}" in st.session_state:
         moeda_selecionada = st.session_state[f"fm_{fk}"]
@@ -85,17 +83,47 @@ def calcular_resumo_financeiro(viagem):
             
     return total_geral, total_pago, total_geral - total_pago
 
-# --- 2. PERSISTÊNCIA DE DADOS ---
+# --- 2. PERSISTÊNCIA DE DADOS (Híbrida: Nuvem / Local) ---
 def carregar_viagens():
+    """Tenta carregar do JSONBin na nuvem. Se falhar ou não tiver senha, carrega local."""
+    if "JSONBIN_ID" in st.secrets and "JSONBIN_KEY" in st.secrets:
+        try:
+            url = f"https://api.jsonbin.io/v3/b/{st.secrets['JSONBIN_ID']}/latest"
+            headers = {"X-Master-Key": st.secrets["JSONBIN_KEY"]}
+            res = requests.get(url, headers=headers)
+            if res.status_code == 200:
+                dados_nuvem = res.json().get('record', [])
+                if isinstance(dados_nuvem, list):
+                    return dados_nuvem
+        except Exception as e:
+            st.error("Erro ao conectar no banco da nuvem. Tentando arquivo local...")
+
+    # Fallback local
     if os.path.exists(ARQUIVO_DADOS):
         with open(ARQUIVO_DADOS, 'r', encoding='utf-8') as f:
             return json.load(f)
     return []
 
 def salvar_viagens(dados):
+    """Tenta salvar no JSONBin na nuvem. Se não tiver senha, salva localmente."""
+    if "JSONBIN_ID" in st.secrets and "JSONBIN_KEY" in st.secrets:
+        try:
+            url = f"https://api.jsonbin.io/v3/b/{st.secrets['JSONBIN_ID']}"
+            headers = {
+                "X-Master-Key": st.secrets["JSONBIN_KEY"], 
+                "Content-Type": "application/json",
+                "X-Bin-Versioning": "false" # Economiza espaço
+            }
+            requests.put(url, json=dados, headers=headers)
+            return # Se salvou na nuvem, finaliza a função
+        except:
+            pass
+            
+    # Fallback local
     with open(ARQUIVO_DADOS, 'w', encoding='utf-8') as f:
         json.dump(dados, f, indent=4, ensure_ascii=False)
 
+# Inicialização de Estados
 if 'viagens' not in st.session_state: st.session_state.viagens = carregar_viagens()
 if 'edit_id' not in st.session_state: st.session_state.edit_id = None
 if 'edit_tab' not in st.session_state: st.session_state.edit_tab = None
@@ -235,14 +263,11 @@ if viagem_atual:
             st.markdown("**Custos e Cotação**")
             c_m1, c_m2, c_m3, c_m4 = st.columns(4)
             moedas = ["USD", "EUR", "CLP", "ARS", "BRL"]
-            
             moeda_default = edit_rot.get('moeda', 'USD') if edit_rot else 'USD'
             idx_moeda = moedas.index(moeda_default) if moeda_default in moedas else 0
             
-            # ATENÇÃO: O on_change é acionado aqui!
             r_moeda = c_m1.selectbox("Moeda", moedas, index=idx_moeda, key=f"rm_{rk}", on_change=on_moeda_change_rot)
             
-            # Carrega a cotação (da memória de edição, ou puxada recém pela API)
             cotacao_sugerida = float(edit_rot.get('cotacao', 1.0)) if (edit_rot and r_pago) else buscar_cotacao_api(r_moeda)
             r_cotacao = c_m2.number_input("Cotação R$", min_value=0.0, value=cotacao_sugerida, format="%.5f", disabled=(r_pago and id_rot is not None), key=f"rc_{rk}")
             
@@ -335,7 +360,6 @@ if viagem_atual:
             moeda_fin_default = edit_fin.get('moeda', 'USD') if edit_fin else 'USD'
             idx_moeda_fin = moedas.index(moeda_fin_default) if moeda_fin_default in moedas else 0
             
-            # ATENÇÃO: O on_change é acionado aqui!
             f_moeda = c4.selectbox("Moeda", moedas, index=idx_moeda_fin, key=f"fm_{fk}", on_change=on_moeda_change_fin)
             f_val = c5.number_input("Valor *", min_value=0.0, value=float(edit_fin['valor']) if edit_fin else 0.0, format="%.2f", key=f"fv_{fk}")
             
